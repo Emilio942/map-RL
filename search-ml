@@ -1,0 +1,42 @@
+Deep Q-Networks (DQN)
+Policy Gradient Methods (REINFORCE)
+Actor-Critic Methods (A2C, A3C)
+Deep Deterministic Policy Gradient (DDPG)
+Twin Delayed DDPG (TD3)
+Soft Actor-Critic (SAC)
+Proximal Policy Optimization (PPO)
+Trust Region Policy Optimization (TRPO)
+Implicit Quantile Networks (IQN)
+Independent Q-Learning for MARL
+Centralized Training with Decentralized Execution (CTDE)
+Value Decomposition Networks (VDN)
+Multi-Agent DDPG (MADDPG)
+Sequential Social Dilemma (SSD) Games
+Cooperative Multi-Agent Systems
+Opponent Modeling in MARL
+Model-Agnostic Meta-Learning (MAML)
+Reptile for Meta-Learning
+Learning to Learn by Gradient Descent by Gradient Descent (L2L)
+Few-shot Learning
+Rapidly Adaptable Learning Systems (RAILS)
+Meta-RL with Recurrent Neural Networks
+NeuroEvolution of Augmenting Topologies (NEAT)
+HyperNEAT
+Genetic Programming
+Covariance Matrix Adaptation Evolution Strategy (CMA-ES)
+Evolving Neural Turing Machines
+Neural Architecture Search (NAS)
+Hyperparameter Optimization (Hyperopt, Optuna)
+Bayesian Optimization
+Ensemble Methods
+TensorFlow Fold for Dynamic Data Structures
+PyTorch Dynamic Graph Structures
+Differenzierbare Datenstrukturen
+Differenzierbare Graphenmodelle
+Graph Neural Networks (GNNs)
+Capsule Networks
+Attention Mechanisms and Transformers
+Sparse Coding and Dictionary Learning
+Reinforcement Learning with Uncertainty
+Curriculum Learning
+Adversarial Training and GANs for RL
