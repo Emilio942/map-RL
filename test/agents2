@@ -1,0 +1,385 @@
+import json
+import os
+import random
+import traceback
+from ollama import Client
+import re      
+import time 
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+MODEL_RESEARCHER = "nemotron-cascade-2:latest"
+MODEL_CRITIC     = "nemotron-cascade-2:latest"
+MODEL_SYNTHESIS  = "nemotron-cascade-2:latest"
+MODEL_LOGISTICS  = "nemotron-cascade-2:latest"
+# ==============================================================================
+
+
+class MathematicalResearchSystem:
+    def __init__(self, topic):
+        self.client = Client(host='http://localhost:11434')
+        self.topic = topic
+        self.mathematical_state = ""
+        self.insight_archive = []
+        self.log_file = "q_infrens.md"
+        self.cluster_history = []
+        self.clusters = [
+            "AlgebraicGeometry",
+            "Analysis",
+            "Topology",
+            "Logic",
+            "NumberTheory",
+            "DifferentialGeometry",
+            "DynamicalSystems",
+            "ProbabilityTheory"
+        ]
+
+    def _query(self, model, system, prompt, is_json=True, max_retries=3):
+        """
+        Robuste Version: Nutzt Ollama Native 'format=json' (Grammar-based) 
+        + Fallback-Parser der Markdown, Text-Müll & verschachtelte Klammern beherrscht.
+        """
+        content = ""
+        for attempt in range(max_retries):
+            try:
+                # 1. OLLAMA NATIVE JSON MODE (WICHTIGST: Erzwingt valides JSON via Grammar)
+                # Nemotron-Modelle haben oft Probleme mit der JSON-Grammatik. Wir schalten sie für
+                # Nemotron im ersten Versuch ab und versuchen es bei Wiederholungsversuchen ohne.
+                use_native_json = is_json and attempt == 0 and "nemotron" not in model.lower()
+                options = {"format": "json"} if use_native_json else {}
+                
+                res = self.client.generate(
+                    model=model, 
+                    system=system, 
+                    prompt=prompt, 
+                    stream=False, 
+                    **options
+                )
+                
+                # Sicheres Response Handling (dein Fix)
+                if isinstance(res, dict):
+                    content = res.get('response', '')
+                elif hasattr(res, 'response'):
+                    content = res.response
+                else:
+                    content = str(res)
+                
+                content = content.strip()
+                
+                if not is_json:
+                    return content
+
+                # ---------------------------------------------------------
+                # PRIORITÄT 1: Direkter Parse (funktioniert bei format=json fast immer)
+                # ---------------------------------------------------------
+                try:
+                    data = json.loads(content)
+                    if isinstance(data, (dict, list)):
+                        return data
+                except json.JSONDecodeError:
+                    pass # Fallback auf manuelle Extraktion
+
+                # ---------------------------------------------------------
+                # PRIORITÄT 2: Robuste manuelle Extraktion (Fallback)
+                # ---------------------------------------------------------
+                extracted = self._extract_json_robust(content)
+                if extracted is not None:
+                    return extracted
+
+                # ---------------------------------------------------------
+                # DEBUGGING: Wenn alles fehlschlägt
+                # ---------------------------------------------------------
+                print(f"  [!] JSON Parse Fehlgeschlagen (Versuch {attempt + 1}/{max_retries})")
+                print(f"      Model: {model} | Length: {len(content)} chars")
+                print(f"      Raw Output (first 500):\n---\n{content[:500]}\n---")
+                
+                # Kurze Pause, damit der Server nicht überlastet wird
+                time.sleep(1)
+
+            except Exception as e:
+                print(f"  [!] API Exception (Versuch {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    traceback.print_exc()
+                time.sleep(2)
+
+        # Totalausfall
+        print(f"  [X] Alle Versuche fehlgeschlagen für {model}. Returne Fallback-Dict mit raw_response.")
+        return {"raw_response": content} if is_json else "Error: Model failed to produce valid output."
+
+
+    def _extract_json_robust(self, text: str):
+        """
+        Extrahiert das äußerste JSON-Objekt/Array aus Text.
+        Behandelt: Markdown Fences, führenden Text, verschachtelte Klammern in Strings.
+        """
+        if not text:
+            return None
+
+        # 1. Markdown Code Fences entfernen (```json ... ``` oder ``` ... ```)
+        import re
+        blocks = re.findall(r'```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```', text, re.DOTALL)
+        if blocks:
+            candidate = blocks[-1].strip()
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass # Fallthrough zu manuellem Parser
+
+        # 2. Manuelles Klammern-Zählen (Stack-basiert) - Findet das *erste* gültige Top-Level Objekt/Array
+        start_idx = -1
+        start_char = ''
+        in_string = False
+        escape_next = False
+        
+        # Finde Start-Index
+        for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\':
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if not in_string and (char == '{' or char == '['):
+                start_idx = i
+                start_char = char
+                break
+        
+        if start_idx == -1:
+            return None
+
+        # Finde End-Index via Stack-Counting
+        count = 0
+        in_string = False
+        escape_next = False
+        end_idx = -1
+        
+        close_char = '}' if start_char == '{' else ']'
+        
+        for i in range(start_idx, len(text)):
+            char = text[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\':
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if not in_string:
+                if char == start_char:
+                    count += 1
+                elif char == close_char:
+                    count -= 1
+                    if count == 0:
+                        end_idx = i
+                        break
+        
+        if end_idx != -1:
+            json_str = text[start_idx:end_idx+1]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                # Letzter Versuch: Trailing Commas vor } oder ] entfernen
+                fixed = re.sub(r',\s*([}\]])', r'\1', json_str)
+                try:
+                    return json.loads(fixed)
+                except:
+                    pass
+        
+        return None
+
+
+    def _levenshtein(self, s1, s2):
+        if len(s1) < len(s2):
+            return self._levenshtein(s2, s1)
+        if len(s2) == 0:
+            return len(s1)
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        return previous_row[-1]
+
+    def _relative_novelty(self, question, archive):
+        if not archive:
+            return 1.0
+        distances = [self._levenshtein(question, a) for a in archive]
+        min_dist = min(distances)
+        max_len = max(len(question), max(len(a) for a in archive))
+        if max_len == 0:
+            return 1.0
+        return min_dist / max_len
+
+    def _select_cluster(self):
+        available = [c for c in self.clusters if c not in self.cluster_history[-3:]]
+        if not available:
+            available = self.clusters
+        return random.choice(available)
+
+    def synthesize(self, mathematical_input):
+        system = (
+            "You are the Mathematical Synthesis Specialist. "
+            "Integrate new findings into the consolidated framework. "
+            "MANDATORY: Preserve all core axioms and logic. "
+            "Output ONLY the updated framework, no commentary."
+        )
+        full_input = f"OLD STATE: {self.mathematical_state[:4000]}\nNEW INPUT: {mathematical_input}"
+        return self._query(MODEL_SYNTHESIS, system, full_input, is_json=False)
+
+    def verify_hypothesis(self, hypothesis):
+        proof_sys = "You are a Professor of Mathematics. Provide a rigorous LaTeX proof. No JSON, no formatting — only pure mathematics."
+        proof = self._query(MODEL_CRITIC, proof_sys, hypothesis, is_json=False)
+        
+        verdict_sys = "Is the following proof valid? Answer ONLY 'valid' or 'invalid'."
+        verdict_raw = self._query(MODEL_LOGISTICS, verdict_sys, proof[:500], is_json=False)
+        
+        if 'valid' in verdict_raw.lower() and 'invalid' not in verdict_raw.lower():
+            verdict = 'valid'
+        elif 'invalid' in verdict_raw.lower():
+            verdict = 'invalid'
+        else:
+            verdict = 'unknown'
+        
+        return {'proof': proof, 'verdict': verdict}
+
+    def run_exploration(self, iterations=100):
+        print(f"--- Starting Autonomous Research Loop ---")
+        self.mathematical_state = f"Research Topic: {self.topic}"
+
+        with open(self.log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n\n# RESEARCH START: {self.topic}\n")
+            f.write(f"## INITIAL STATE\n{self.mathematical_state}\n\n---\n")
+
+            for i in range(iterations):
+                print(f"\n[Cycle {i+1}/{iterations}] Planning...")
+                
+                cluster = self._select_cluster()
+                self.cluster_history.append(cluster)
+                
+                plan_sys = (
+                    "You are a Research Planner. Your task is to suggest 3 new mathematical research angles. "
+                    "Respond ONLY with a JSON object in this exact format: "
+                    '{"new_perspectives": [{"angle": "title here", "hypothesis": "description here"}]}'
+                )
+                
+                plan_prompt = (
+                    f"Topic: {self.topic}\n"
+                    f"Current cluster: {cluster}\n"
+                    f"Recent clusters: {', '.join(self.cluster_history[-5:])}\n"
+                    f"Previously covered: {len(self.insight_archive)} angles\n"
+                    f"Suggest 3 fresh mathematical angles for this topic."
+                )
+                
+                discovery = self._query(MODEL_LOGISTICS, plan_sys, plan_prompt)
+                
+                perspectives = []
+                if isinstance(discovery, dict):
+                    perspectives = discovery.get('new_perspectives', [])
+                    if not perspectives and "raw_response" in discovery:
+                        # Extraktionsversuch
+                        extracted = self._extract_json_robust(discovery["raw_response"])
+                        if isinstance(extracted, dict):
+                            perspectives = extracted.get('new_perspectives', [])
+                elif isinstance(discovery, list) and len(discovery) > 0:
+                    perspectives = discovery
+                
+                if not perspectives:
+                    print("  [!] Planner returned no perspectives. Retrying with simpler prompt...")
+                    fallback_sys = "Suggest 3 mathematical research angles as JSON."
+                    fallback_prompt = f"Topic: {self.topic}. Give me 3 angles."
+                    discovery = self._query(MODEL_LOGISTICS, fallback_sys, fallback_prompt)
+                    
+                    if isinstance(discovery, dict):
+                        perspectives = discovery.get('new_perspectives', [])
+                    elif isinstance(discovery, list):
+                        perspectives = discovery
+
+                if not perspectives:
+                    print(f"  [SKIP] Cycle {i+1} aborted - no valid perspectives")
+                    continue
+
+                for p in perspectives:
+                    if not isinstance(p, dict):
+                        continue
+                        
+                    angle_name = p.get('angle', '') or p.get('title', '') or 'Unknown'
+                    hypothesis = p.get('hypothesis', '') or p.get('description', '') or 'No hypothesis'
+                    
+                    if not angle_name or not hypothesis:
+                        continue
+                    
+                    novelty_score = self._relative_novelty(angle_name, 
+                        [a['angle'] for a in self.insight_archive])
+                    
+                    if novelty_score < 0.5 and len(self.insight_archive) > 5:
+                        print(f"  [SKIP] {angle_name} too similar (novelty: {novelty_score:.2f})")
+                        continue
+                    
+                    print(f"  -> Researching: {angle_name} (novelty: {novelty_score:.2f}, cluster: {cluster})")
+
+                    verify_sys = (
+                        "You are a Formal Verification Agent. "
+                        "Use rigorous mathematics in LaTeX. "
+                        "You MUST respond ONLY with a JSON object containing the keys 'proof' and 'verdict' like this:\n"
+                        '{"proof": "your rigorous LaTeX proof here", "verdict": "valid" or "invalid"}\n'
+                        "Do not output any introductory or concluding text outside the JSON."
+                    )
+                    res = self._query(MODEL_CRITIC, verify_sys, hypothesis)
+                    
+                    proof = 'No proof generated.'
+                    verdict = 'unknown'
+                    if isinstance(res, dict):
+                        if "raw_response" in res:
+                            proof = res["raw_response"] or 'No proof generated.'
+                            if not proof.strip():
+                                proof = 'No proof generated.'
+                            
+                            proof_lower = proof.lower()
+                            if "invalid" in proof_lower:
+                                verdict = "invalid"
+                            elif "valid" in proof_lower:
+                                verdict = "valid"
+                            else:
+                                verdict = "unknown"
+                        else:
+                            proof = res.get('proof', 'No proof generated.')
+                            verdict = res.get('verdict', 'unknown')
+
+                    self.insight_archive.append({
+                        "angle": angle_name,
+                        "verdict": verdict,
+                        "cluster": cluster,
+                        "novelty": round(novelty_score, 3)
+                    })
+
+                    f.write(f"### Cycle {i+1} - {angle_name}\n")
+                    f.write(f"**Cluster:** {cluster}\n")
+                    f.write(f"**Hypothesis:** {hypothesis}\n")
+                    f.write(f"**Verdict:** {verdict}\n")
+                    f.write(f"**Novelty Score:** {novelty_score:.3f}\n")
+                    f.write(f"**Proof:**\n{proof}\n\n---\n")
+                    f.flush()
+
+                    self.mathematical_state = self.synthesize(proof)
+
+        return self.mathematical_state
+
+
+if __name__ == "__main__":
+    t = 'Grassmannian Subspace Projections and Banach Contraction Collapse: Proving the convergence divergence conditions of the multi-shot residual recovery loop under extreme coordinate pruning (k << N). Let V in R^{N x M} be a near-tight Grassmannian frame in superposition (N = 256, M = 1,000,000). Let V_sparse be obtained by pruning each column of V to its top-k elements (k = 2) and re-normalizing each column to unit L2-norm. The iterative residual recovery loop is defined as: r_{t+1} = S_t - V_sparse * phi( V_sparse^T * r_t * scales + b ) * scales 1. Rigorously prove the divergence conditions of the iterative loop r_{t+1} = G(r_t) under the Banach Fixed-Point Theorem. Derive the Lipschitz contractivity constant L(G) of the composition operator as a function of the sparse frame bounds (A_sparse, B_sparse) and the mutual coherence mu_sparse. 2. Derive the analytical relationship between the column-wise energy preservation ratio E_k = sum_{d in S_j} v_{j,d}^2 and the spectral radius rho(I - V_sparse * V_sparse^T). Find the critical threshold E_min below which rho exceeds 1.0, violating the contractivity and self-mapping conditions. 3. Formulate a regularized, coordinate-weighted sparse projection operator that minimizes interference noise amplification while mathematically guaranteeing L(G) < 1. Provide a complete, step-by-step mathematical derivation using formal logic and LaTeX formatting for all proofs.'
+    
+    system = MathematicalResearchSystem(t)
+    system.run_exploration(iterations=5669)
