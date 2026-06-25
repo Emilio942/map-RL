@@ -19,7 +19,7 @@ from ollama import Client
 # CONFIGURATION
 # ==============================================================================
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-VENV_PATH = "/home/emilio/Documents/ai/map-RL/.ollama/.venv"
+VENV_PATH = "/home/emilio/Documents/ai/map-RL/.ollama/.venv" # .venv 
 MODEL_ARCHITECT = "nemotron-cascade-2:latest"
 MODEL_PROGRAMMER = "VibeThinker-3B"#test               "qwen3-coder:30b"
 MODEL_AUDITOR = "nemotron-cascade-2:latest"
