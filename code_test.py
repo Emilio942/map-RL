@@ -21,7 +21,7 @@ from ollama import Client
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 VENV_PATH = "/home/emilio/Documents/ai/map-RL/.ollama/.venv" # .venv 
 MODEL_ARCHITECT = "nemotron-cascade-2:latest"
-MODEL_PROGRAMMER = "qwen3-coder:30b"   #"VibeThinker-3B"#test               
+MODEL_PROGRAMMER =   "VibeThinker-3B"#test               
 MODEL_AUDITOR = "nemotron-cascade-2:latest"
 CHECKPOINT_FILE = "experiment_checkpoint.json"
 RESULTS_DIR = Path("results")
